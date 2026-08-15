@@ -1,0 +1,20 @@
+{
+  "name": "whoop-coach-saas",
+  "version": "3.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Hosted multi-tenant service connecting Whoop to Claude via per-user MCP endpoints (Postgres/Neon)",
+  "scripts": {
+    "start": "node server.js",
+    "keygen": "node -e \"console.log('APP_ENCRYPTION_KEY='+require('crypto').randomBytes(32).toString('hex'))\""
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "express": "^4.19.0",
+    "pg": "^8.11.0"
+  },
+  "devDependencies": {
+    "pg-mem": "^3.0.0"
+  }
+}

@@ -1,0 +1,18 @@
+# Render blueprint. In Render: New → Blueprint → point at your repo.
+services:
+  - type: web
+    name: whoop-coach
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL        # set in dashboard (Neon pooled string)
+        sync: false
+      - key: APP_ENCRYPTION_KEY  # set in dashboard (npm run keygen)
+        sync: false
+      - key: PUBLIC_URL          # set to your https://<app>.onrender.com
+        sync: false
+      - key: DEFAULT_TZ
+        value: Asia/Kolkata

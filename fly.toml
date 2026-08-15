@@ -1,0 +1,22 @@
+# Whoop Coach SaaS — Fly.io config
+# First run:  fly launch --no-deploy   (accept, it'll pick up this file)
+app = "whoop-coach-CHANGEME"          # must be globally unique
+primary_region = "bom"                 # Mumbai — closest to you; any region is fine
+
+[build]
+
+[env]
+  PORT = "3000"
+  DB_PATH = "/data/data.sqlite"
+  # PUBLIC_URL + APP_ENCRYPTION_KEY are set as SECRETS, not here.
+
+[[mounts]]
+  source = "whoop_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = false           # always-on: users' Claude breaks if it sleeps
+  auto_start_machines = true
+  min_machines_running = 1
