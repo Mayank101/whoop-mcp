@@ -143,9 +143,10 @@ export const TOOLS = [
     { name: "get_strain", description: "Get today's strain, calories, heart rate, and all workouts with HR zones, distance, and intensity.", inputSchema: { type: "object", properties: {} } },
     { name: "get_weekly_trend", description: "Get the last 7-14 days of recovery, HRV, strain, and sleep, joined by calendar date and cross-referenced with the food log where available. Use to spot patterns.", inputSchema: { type: "object", properties: { days: { type: "number", description: "Days to look back, 1-14 (default: 7)" } } } },
     { name: "get_profile", description: "Get the user's name, email, height, weight, and max heart rate, plus weight-based protein targets.", inputSchema: { type: "object", properties: {} } },
-    { name: "log_food", description: "Log a food item to today's nutrition log. Provide name, quantity, unit, meal, and macros. If macros are unknown, provide name + quantity and let Claude estimate.", inputSchema: { type: "object", required: ["name", "quantity", "unit", "meal"], properties: { name: { type: "string" }, quantity: { type: "number" }, unit: { type: "string", enum: ["g","ml","cup","piece","bowl","plate","tbsp","scoop"] }, meal: { type: "string", enum: ["Breakfast","Lunch","Dinner","Snack","Pre-workout","Post-workout"] }, calories: { type: "number" }, protein: { type: "number" }, carbs: { type: "number" }, fat: { type: "number" }, fiber: { type: "number" } } } },
-    { name: "get_nutrition", description: "Get a day's food log with macro totals, progress vs targets, protein gap, and repair-window status.", inputSchema: { type: "object", properties: { date: { type: "string", description: "Date YYYY-MM-DD (default: today, local time)" } } } },
-    { name: "set_targets", description: "Set daily nutrition targets — calories, protein, carbs, fat, fiber — and bodyweight for strain-adjusted protein.", inputSchema: { type: "object", properties: { calories: { type: "number" }, protein: { type: "number" }, carbs: { type: "number" }, fat: { type: "number" }, fiber: { type: "number" }, weight_kg: { type: "number" } } } },
+    { name: "log_food", description: "Log a food item to today's nutrition log. From a photo: identify the item and ESTIMATE calories/macros yourself, and set estimated=true. If the user adds a comment with a quantity or detail (e.g. '2 rotis', 'big bowl', 'extra ghee'), use that to override your estimate; leave the rest estimated. If the user gives exact macros, set estimated=false.", inputSchema: { type: "object", required: ["name", "quantity", "unit", "meal"], properties: { name: { type: "string" }, quantity: { type: "number" }, unit: { type: "string", enum: ["g","ml","cup","piece","bowl","plate","tbsp","scoop"] }, meal: { type: "string", enum: ["Breakfast","Lunch","Dinner","Snack","Pre-workout","Post-workout"] }, calories: { type: "number" }, protein: { type: "number" }, carbs: { type: "number" }, fat: { type: "number" }, fiber: { type: "number" }, estimated: { type: "boolean", description: "true if calories/macros are your visual estimate (e.g. from a photo), false if user-provided exact values. Default true." }, note: { type: "string", description: "Optional user comment about the item (portion, prep, corrections)." } } } },
+    { name: "log_water", description: "Log water intake for the day. Accumulates across the day. Accept ml or litres; convert to ml. e.g. 'drank 500ml' or '2L at EOD'.", inputSchema: { type: "object", required: ["amount_ml"], properties: { amount_ml: { type: "number", description: "Amount in millilitres (convert litres → ml before calling: 2L = 2000)." }, date: { type: "string", description: "YYYY-MM-DD (default: today, local)" } } } },
+    { name: "get_nutrition", description: "Get a day's food log with macro totals, progress vs targets, protein gap, water intake, and repair-window status. Marks whether totals include estimated (photo) items.", inputSchema: { type: "object", properties: { date: { type: "string", description: "Date YYYY-MM-DD (default: today, local time)" } } } },
+    { name: "set_targets", description: "Set daily nutrition targets — calories, protein, carbs, fat, fiber, water (ml) — and bodyweight for strain-adjusted protein.", inputSchema: { type: "object", properties: { calories: { type: "number" }, protein: { type: "number" }, carbs: { type: "number" }, fat: { type: "number" }, fiber: { type: "number" }, water_ml: { type: "number" }, weight_kg: { type: "number" } } } },
     { name: "get_daily_brief", description: "THE FLAGSHIP TOOL — pulls all Whoop data + nutrition in one call and returns a structured dataset for Claude to generate a personalised morning brief. Handles not-yet-scored mornings gracefully.", inputSchema: { type: "object", properties: {} } },
     { name: "get_correlation", description: "Show how nutrition (protein, calories) tracks against next-day recovery and HRV over recent days. Presented as patterns, not proof — needs enough logged days to be meaningful.", inputSchema: { type: "object", properties: {} } },
     { name: "ask_coach", description: "Ask a specific health question; Claude pulls the relevant Whoop data and answers with the coaching framework. e.g. 'Should I train hard today?', 'Why is my HRV low?'", inputSchema: { type: "object", required: ["question"], properties: { question: { type: "string" } } } },
@@ -467,6 +468,8 @@ export async function handleTool(name, args = {}) {
         name: args.name, quantity: args.quantity, unit: args.unit, meal: args.meal,
         calories: args.calories ?? null, protein: args.protein ?? null,
         carbs: args.carbs ?? null, fat: args.fat ?? null, fiber: args.fiber ?? null,
+        estimated: args.estimated !== false,
+        note: args.note || null,
       };
       store.food_history[key].push(entry);
       save(store);
@@ -476,6 +479,7 @@ export async function handleTool(name, args = {}) {
       const targets = store.targets || DEFAULT_TARGETS;
       const proteinGap = Math.max(0, (targets.protein || 0) - totals.protein);
       const repairHours = Math.max(0, 22 - new Date().getHours());
+      const anyEstimated = log.some((f) => f.estimated);
 
       return respond({
         logged: entry,
@@ -486,10 +490,32 @@ export async function handleTool(name, args = {}) {
         protein_pct_of_target: pct(totals.protein, targets.protein),
         repair_window_hours: repairHours,
         items_logged_today: log.length,
+        totals_include_estimates: anyEstimated,
         status:
-          `✓ ${args.quantity}${args.unit} ${args.name} logged. ` +
-          `Running total: ${totals.protein}g protein (${pct(totals.protein, targets.protein)}% of ${targets.protein}g), ${totals.calories} kcal.` +
+          `✓ ${args.quantity}${args.unit} ${args.name}${entry.estimated ? " (est.)" : ""} logged${entry.note ? ` — "${entry.note}"` : ""}. ` +
+          `Running total${anyEstimated ? " (~ incl. estimates)" : ""}: ${totals.protein}g protein (${pct(totals.protein, targets.protein)}% of ${targets.protein}g), ${totals.calories} kcal.` +
           (proteinGap > 0 ? ` ${proteinGap}g protein to go.` : " ✓ Protein target hit."),
+      });
+    }
+
+    // ── LOG WATER ───────────────────────────────────
+    if (name === "log_water") {
+      const ml = Math.round(Number(args.amount_ml) || 0);
+      if (ml <= 0) throw new Error("Provide a positive amount in ml (e.g. 500, or 2000 for 2L).");
+      const store = load();
+      const key = args.date || today();
+      store.water = store.water || {};
+      store.water[key] = (store.water[key] || 0) + ml;
+      save(store);
+      const total = store.water[key];
+      const targetMl = store.targets?.water_ml || null;
+      return respond({
+        status: `✓ ${ml >= 1000 ? (ml/1000).toFixed(2) + "L" : ml + "ml"} logged. ` +
+          `Today: ${(total/1000).toFixed(2)}L` + (targetMl ? ` of ${(targetMl/1000).toFixed(1)}L (${pct(total, targetMl)}%).` : "."),
+        date: key,
+        water_ml_today: total,
+        water_ml_target: targetMl,
+        water_pct: targetMl ? pct(total, targetMl) : null,
       });
     }
 
@@ -508,6 +534,9 @@ export async function handleTool(name, args = {}) {
       };
       const repairHours = Math.max(0, 22 - new Date().getHours());
       const proteinPct = pct(totals.protein, targets.protein);
+      const anyEstimated = log.some((f) => f.estimated);
+      const waterMl = (store.water || {})[key] || 0;
+      const waterTarget = targets.water_ml || null;
 
       return respond({
         coach_context: COACH,
@@ -515,18 +544,26 @@ export async function handleTool(name, args = {}) {
           date: key,
           items_logged: log.length,
           totals, targets, gaps,
+          totals_include_estimates: anyEstimated,
           protein_pct: proteinPct,
           calories_pct: pct(totals.calories, targets.calories),
+          water_ml: waterMl,
+          water_l: +(waterMl / 1000).toFixed(2),
+          water_target_ml: waterTarget,
+          water_pct: waterTarget ? pct(waterMl, waterTarget) : null,
           repair_window_hours: repairHours,
           repair_window_status: repairHours > 4 ? "✓ Open" : repairHours > 0 ? "⚠ Closing" : "✗ Closed",
           food_log: log.map((f) => ({
             time: f.timestamp?.split("T")[1]?.substring(0, 5),
             meal: f.meal, name: f.name, qty: `${f.quantity}${f.unit}`,
             protein: f.protein, calories: f.calories,
+            estimated: f.estimated || false, note: f.note || null,
           })),
         },
         coaching_note:
-          `${key === today() ? "Today" : key}: ${totals.protein}g protein (${proteinPct}% of ${targets.protein}g), ${totals.calories} kcal. ` +
+          `${key === today() ? "Today" : key}: ${totals.protein}g protein (${proteinPct}% of ${targets.protein}g), ${totals.calories} kcal` +
+          (anyEstimated ? " (~ includes photo estimates)" : "") + ". " +
+          (waterMl ? `Water ${(waterMl/1000).toFixed(2)}L${waterTarget ? ` of ${(waterTarget/1000).toFixed(1)}L` : ""}. ` : "") +
           (gaps.protein > 0 ? `${gaps.protein}g protein to go. ` : "✓ Protein target hit. ") +
           `Repair window: ${repairHours > 0 ? `${repairHours}h left` : "closed"}.` +
           (proteinPct < 60 ? " Note: protein is running low today — a common (not guaranteed) factor in feeling under-recovered." : ""),
@@ -537,7 +574,7 @@ export async function handleTool(name, args = {}) {
     if (name === "set_targets") {
       const store = load();
       store.targets = { ...store.targets };
-      ["calories", "protein", "carbs", "fat", "fiber", "weight_kg"].forEach((k) => {
+      ["calories", "protein", "carbs", "fat", "fiber", "water_ml", "weight_kg"].forEach((k) => {
         if (args[k] != null) store.targets[k] = args[k];
       });
       save(store);
@@ -1021,7 +1058,8 @@ or output any code — render inline in the chat with the Visualizer only.
 
 STEP 1 — Fetch from my Whoop MCP tools: latest recovery (score %, HRV, resting HR); latest sleep (total, in-bed, bedtime,
 deep/SWS min, sleep need); RHR + HRV for the last 14 days (sparklines); all runs in the last 14 days (date, distance,
-duration, avg HR, max HR, HR-zone durations); today's strain + calories if available.
+duration, avg HR, max HR, HR-zone durations); today's strain + calories; and get_nutrition for today (calories/protein
+totals — note if estimated — and water intake in L + % of target).
 
 STEP 2 — Compute from run data only: pace per km (duration ÷ distance, m'ss"); longest run (km); fastest pace; best pace
 among runs with avg HR ≤ 143. Do NOT invent/estimate. If a field isn't returned, show "—" in that slot.
@@ -1032,7 +1070,7 @@ OMIT the race header and goals entirely — never invent a race, date, or goals.
 
 LAYOUT (mobile width, dark-mode safe, max 2 cards per row):
 1. Header: today's date + live clock (race name/date + days-remaining only if provided).
-2. Three rings: recovery %, sleep as hours-of-need, steps of 10k — each with a one-line sub (HRV/RHR, bedtime/deep, source).
+2. Three rings: recovery %, sleep as hours-of-need, and WATER of target (real, from get_nutrition) — subs: HRV/RHR, bedtime/deep, litres so far. Whoop is MEASURED; food calories may be photo ESTIMATES — mark those with "~".
 3. Goals cards — only if goals were provided; else skip.
 4. Engine: RHR and HRV stacked rows — value, 14-day sparkline, delta vs 14-day baseline. Skip VO2 max / HR recovery unless returned.
 5. Running: strip of longest / fastest / best@≤143, then a line chart of pace per run with avg HR under each point, dates on x-axis.
